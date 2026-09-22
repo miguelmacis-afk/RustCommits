@@ -94,25 +94,46 @@ def extract_commit_message(card):
 def extract_media(element):
     images, videos = [], []
     
-    for img in element.find_all('img'):
+    # Trabajar sobre una copia limpia sin elementos de usuario/avatar
+    card_copy = BeautifulSoup(str(element), 'html.parser')
+    for avatar_node in card_copy.select('.avatar, .user-avatar, .author, .user-name, .user, [class*="avatar"]'):
+        avatar_node.decompose()
+        
+    # Palabras prohibidas en URLs para ignorar avatares
+    AVATAR_TERMS = ['avatar', 'avatars', 'profile', 'gravatar', 'steamcommunity', '.svg']
+
+    # 1. Extraer imágenes de etiquetas <img> que hayan quedado
+    for img in card_copy.find_all('img'):
         src = img.get('src')
-        if src and not src.endswith('.svg') and 'avatar' not in src:
-            src = 'https:' + src if src.startswith('//') else ('https://commits.facepunch.com' + src if not src.startswith('http') else src)
-            images.append(src)
+        if not src:
+            continue
+        src_lower = src.lower()
+        if any(term in src_lower for term in AVATAR_TERMS):
+            continue
             
-    for video in element.find_all(['video', 'source']):
+        full_url = 'https:' + src if src.startswith('//') else ('https://commits.facepunch.com' + src if not src.startswith('http') else src)
+        if full_url not in images:
+            images.append(full_url)
+            
+    # 2. Extraer vídeos de etiquetas <video> o <source>
+    for video in card_copy.find_all(['video', 'source']):
         src = video.get('src')
         if src:
-            src = 'https:' + src if src.startswith('//') else ('https://commits.facepunch.com' + src if not src.startswith('http') else src)
-            if src not in videos:
-                videos.append(src)
+            full_url = 'https:' + src if src.startswith('//') else ('https://commits.facepunch.com' + src if not src.startswith('http') else src)
+            if full_url not in videos:
+                videos.append(full_url)
             
-    text = element.get_text()
+    # 3. Extraer URLs multimedia del texto restante
+    text = card_copy.get_text()
     urls = re.findall(r'https?://[^\s]+\.(?:png|jpg|jpeg|gif|mp4|webm)', text)
     for url in urls:
+        url_lower = url.lower()
+        if any(term in url_lower for term in AVATAR_TERMS):
+            continue
+            
         if url.endswith(('.mp4', '.webm')) and url not in videos:
             videos.append(url)
-        elif url not in images and not url.endswith('.svg'):
+        elif not url.endswith(('.mp4', '.webm')) and url not in images:
             images.append(url)
             
     return images, videos
@@ -120,12 +141,10 @@ def extract_media(element):
 def send_to_discord_batch(commits_batch):
     print(f"[*] Preparando envío de lote minimalista con {len(commits_batch)} commits a Discord...")
     embeds = []
+    video_urls = []
     
     for commit in commits_batch:
-        # Limpiar prefijo molesto del repositorio
         clean_repo = commit['repo'].replace("rust_reboot/main/", "")
-        
-        # Indicador visual si hay vídeo
         video_icon = " 🎬" if commit['videos'] else ""
 
         embed = {
@@ -133,7 +152,6 @@ def send_to_discord_batch(commits_batch):
             "author": {
                 "name": f"👤 {commit['author']}"
             },
-            # Todo el contenido en la descripción para un aspecto compacto y limpio
             "description": f"**{commit['translated_msg']}**\n\n🔀 `{clean_repo}`\n📌 [#{commit['id']}]({commit['url']}){video_icon}",
             "footer": {
                 "text": "⚙️ Facepunch Rust Commits"
@@ -141,13 +159,20 @@ def send_to_discord_batch(commits_batch):
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
-        # Mostrar SOLAMENTE la primera imagen como miniatura pequeña (thumbnail)
+        # Imagen grande en el embed
         if commit['images']:
-            embed["thumbnail"] = {"url": commit['images'][0]}
+            embed["image"] = {"url": commit['images'][0]}
 
         embeds.append(embed)
 
+        if commit['videos']:
+            video_urls.extend(commit['videos'])
+
     payload = {"embeds": embeds}
+    
+    if video_urls:
+        payload["content"] = "\n".join(video_urls)
+
     res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
     if res.status_code in [200, 204]:
         print(f"[+] Lote de {len(commits_batch)} commits enviado correctamente a Discord.")
@@ -196,7 +221,7 @@ def run_scraper():
         message = extract_commit_message(card)
         images, videos = extract_media(card)
 
-        # REGLA OBLIGATORIA: Si tiene multimedia (imagen o vídeo), se aprueba siempre.
+        # REGLA OBLIGATORIA: Si tiene multimedia real de commit (imagen o vídeo), pasa siempre
         if images or videos:
             is_sig = True
             reason = f"Aprobado por multimedia ({len(images)} img, {len(videos)} vid)"
