@@ -3,6 +3,7 @@ import json
 import re
 import time
 import requests
+from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 
@@ -52,18 +53,18 @@ def translate_text(text):
     if not text:
         return text
 
-    # 1. Intentar con GoogleTranslator añadiendo reintentos y pausas preventivas
+    # 1. Intentar con GoogleTranslator añadiendo reintentos y pausas
     for attempt in range(3):
         try:
             translated = GoogleTranslator(source='auto', target='es').translate(text)
             if translated:
-                time.sleep(1)  # Pausa de 1s para no saturar los servidores de Google
+                time.sleep(1)
                 return translated
         except Exception as e:
             print(f"[!] Google Translator límite/error (Intento {attempt + 1}/3): {e}")
-            time.sleep(2 * (attempt + 1))  # Espera progresiva: 2s, 4s, 6s
+            time.sleep(2 * (attempt + 1))
 
-    # 2. Proveedor de respaldo (MyMemory) si Google falla por completo
+    # 2. Proveedor de respaldo (MyMemory)
     try:
         print("[*] Probando proveedor de traducción de respaldo (MyMemory)...")
         translated = MyMemoryTranslator(source='en-US', target='es-ES').translate(text)
@@ -75,12 +76,10 @@ def translate_text(text):
     return text
 
 def clean_message(raw_text):
-    """Limpia texto basura como contadores de reacciones o espacios extra."""
     cleaned = re.sub(r'thumb_up\s*\d+\s*thumb_down\s*\d+', '', raw_text, flags=re.IGNORECASE)
     return cleaned.strip()
 
 def extract_commit_message(card):
-    """Busca el mensaje del commit usando múltiples selectores o limpiando el nodo."""
     msg_el = card.select_one('.title, .commit-title, .message, .description, .text, p, blockquote, div.content')
     if msg_el and msg_el.get_text(strip=True):
         return clean_message(msg_el.get_text(strip=True))
@@ -119,39 +118,65 @@ def extract_media(element):
     return images, videos
 
 def send_to_discord_batch(commits_batch):
-    print(f"[*] Preparando envío de lote con {len(commits_batch)} commits a Discord...")
+    print(f"[*] Preparando envío de lote profesional con {len(commits_batch)} commits a Discord...")
     embeds = []
-    extra_content = []
     
     for commit in commits_batch:
+        # Formatear archivos multimedia adicionales como hipervínculos Markdown
+        extra_media = []
+        if commit['videos']:
+            video_links = [f"[🎬 Vídeo {i+1}]({url})" for i, url in enumerate(commit['videos'])]
+            extra_media.append(" • ".join(video_links))
+        if len(commit['images']) > 1:
+            img_links = [f"[🖼️ Imagen {i+2}]({url})" for i, url in enumerate(commit['images'][1:])]
+            extra_media.append(" • ".join(img_links))
+
+        # Estructura del Embed Profesional
         embed = {
-            "title": f"Commit de {commit['author']} ({commit['repo']})",
+            "title": f"🛠️ {commit['translated_msg']}",
             "url": commit['url'],
-            "description": commit['translated_msg'],
-            "color": 15258703
+            "color": 13517355,  # Color oficial Naranja/Rojo Rust (#CE422B)
+            "author": {
+                "name": f"Desarrollador: {commit['author']}",
+                "icon_url": "https://commits.facepunch.com/favicon.ico"
+            },
+            "fields": [
+                {
+                    "name": "📂 Rama / Repositorio",
+                    "value": f"`{commit['repo']}`",
+                    "inline": True
+                },
+                {
+                    "name": "🆔 ID del Commit",
+                    "value": f"[`#{commit['id']}`]({commit['url']})",
+                    "inline": True
+                }
+            ],
+            "footer": {
+                "text": "Facepunch Rust Commits",
+                "icon_url": "https://rust.facepunch.com/favicon.ico"
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
-        
+
+        # Añadir multimedia adicional si existe
+        if extra_media:
+            embed["fields"].append({
+                "name": "📎 Multimedia Adicional",
+                "value": "\n".join(extra_media),
+                "inline": False
+            })
+
+        # Añadir imagen principal al Embed si existe
         if commit['images']:
             embed["image"] = {"url": commit['images'][0]}
-            
+
         embeds.append(embed)
-        
-        media_links = []
-        if commit['videos']:
-            media_links.append("**Vídeos:** " + " | ".join(commit['videos']))
-        if len(commit['images']) > 1:
-            media_links.append("**Más imgs:** " + " | ".join(commit['images'][1:]))
-            
-        if media_links:
-            extra_content.append(f"🔗 **Extra de {commit['author']}**: " + " - ".join(media_links))
 
     payload = {"embeds": embeds}
-    if extra_content:
-        payload["content"] = "\n".join(extra_content)
-        
     res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
     if res.status_code in [200, 204]:
-        print(f"[+] Lote de {len(commits_batch)} commits enviado correctamente.")
+        print(f"[+] Lote de {len(commits_batch)} commits enviado correctamente a Discord.")
     else:
         print(f"[!] Error enviando a Discord ({res.status_code}): {res.text}")
 
