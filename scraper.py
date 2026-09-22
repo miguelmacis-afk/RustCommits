@@ -49,10 +49,14 @@ def is_significant(message):
     return False, "No contiene palabras clave significativas"
 
 def translate_text(text):
+    if not text:
+        return text
     try:
-        return GoogleTranslator(source='auto', target='es').translate(text)
+        # Fijamos source='en' explícitamente para evitar fallos de autodetección
+        translated = GoogleTranslator(source='en', target='es').translate(text)
+        return translated if translated else text
     except Exception as e:
-        print(f"[!] Error en la traducción: {e}")
+        print(f"[!] Error traduciendo '{text[:30]}...': {e}")
         return text
 
 def clean_message(raw_text):
