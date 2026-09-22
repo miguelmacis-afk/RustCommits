@@ -7,9 +7,7 @@ from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 
 # --- CONFIGURACIÓN ---
-# Obtiene el webhook de las variables de entorno de GitHub
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-# URL corregida (Facepunch usa el shortname directamente, sin /r/)
 FACEPUNCH_URL = "https://commits.facepunch.com/rust"
 SEEN_FILE = "seen_commits.json"
 BATCH_SIZE = 5
@@ -27,11 +25,8 @@ def load_seen():
             seen = set(json.load(f))
             print(f"[*] Éxito: {len(seen)} commits cacheados previamente.")
             return seen
-    except FileNotFoundError:
-        print("[*] No se encontró cache previo. Se creará uno nuevo.")
-        return set()
-    except Exception as e:
-        print(f"[!] Error leyendo cache: {e}")
+    except Exception:
+        print("[*] No se encontró cache previo. Se iniciará desde cero.")
         return set()
 
 def save_seen(seen):
@@ -60,12 +55,27 @@ def translate_text(text):
         print(f"[!] Error en la traducción: {e}")
         return text
 
+def extract_commit_message(card):
+    """Busca el mensaje del commit usando múltiples selectores o limpiando el nodo."""
+    # 1. Intentar selectores conocidos de Facepunch
+    msg_el = card.select_one('.title, .commit-title, .message, .description, .text, p, blockquote, div.content')
+    if msg_el and msg_el.get_text(strip=True):
+        return msg_el.get_text(strip=True)
+    
+    # 2. Respaldo: Clonar la tarjeta y eliminar elementos de autor, repo y tiempo para extraer el texto limpio
+    card_copy = BeautifulSoup(str(card), 'html.parser')
+    for unneeded in card_copy.select('.author, .user-name, .repo, .repository, .date, .time, .avatar, img, video'):
+        unneeded.decompose()
+    
+    clean_text = card_copy.get_text(separator=' ', strip=True)
+    return clean_text
+
 def extract_media(element):
     images, videos = [], []
     
     for img in element.find_all('img'):
         src = img.get('src')
-        if src and not src.endswith('.svg'):
+        if src and not src.endswith('.svg') and 'avatar' not in src:
             src = 'https:' + src if src.startswith('//') else ('https://commits.facepunch.com' + src if not src.startswith('http') else src)
             images.append(src)
             
@@ -128,7 +138,6 @@ def run_scraper():
     
     if not DISCORD_WEBHOOK_URL:
         print("[!] ERROR CRÍTICO: No se encontró la variable DISCORD_WEBHOOK_URL.")
-        print("[!] Verifica los Secrets en GitHub Actions.")
         return
 
     seen = load_seen()
@@ -140,17 +149,10 @@ def run_scraper():
     if res.status_code != 200:
         print(f"[!] Error HTTP al acceder a Facepunch: Código {res.status_code}")
         return
-    print("[*] Conexión HTTP exitosa.")
 
     soup = BeautifulSoup(res.text, 'html.parser')
     cards = soup.select('.commit-card, .commit, div[data-commit-id], a.commit')
     print(f"[*] HTML parseado. Se encontraron {len(cards)} tarjetas de commits en la web.")
-    
-    if len(cards) == 0:
-        print("[!] ADVERTENCIA: Se encontraron 0 commits. Es posible que la web cargue los datos mediante JavaScript y BeautifulSoup no pueda verlos.")
-        print("[!] HTML de la web (primeros 500 caracteres):")
-        print(res.text[:500])
-        return
 
     batch = []
     
@@ -161,12 +163,7 @@ def run_scraper():
         if not commit_id and link_el:
             commit_id = link_el['href'].strip('/')
             
-        if not commit_id:
-            print("[-] Tarjeta ignorada: No se pudo encontrar un ID de commit.")
-            continue
-            
-        if commit_id in seen:
-            print(f"[-] Omitido (ya visto): {commit_id}")
+        if not commit_id or commit_id in seen:
             continue
 
         author_el = card.select_one('.author, .user-name')
@@ -175,10 +172,10 @@ def run_scraper():
         repo_el = card.select_one('.repo, .repository')
         repo = repo_el.get_text(strip=True) if repo_el else "Rust"
         
-        msg_el = card.select_one('.message, .description')
-        message = msg_el.get_text(strip=True) if msg_el else ""
+        # Extracción mejorada del mensaje
+        message = extract_commit_message(card)
 
-        print(f"[*] Analizando commit nuevo: {commit_id} de {author}...")
+        print(f"[*] Analizando commit: {commit_id} de {author} | Msg: '{message[:50]}...'")
         
         is_sig, reason = is_significant(message)
         
@@ -203,15 +200,13 @@ def run_scraper():
                 batch = []
                 time.sleep(2)
         else:
-            print(f"  [-] DESCARTADO: {reason} | Mensaje original: '{message}'")
+            print(f"  [-] DESCARTADO: {reason}")
 
         seen.add(commit_id)
 
     if batch:
-        print(f"[*] Enviando los últimos {len(batch)} commits que no llenaron un lote entero.")
+        print(f"[*] Enviando {len(batch)} commits finales...")
         send_to_discord_batch(batch)
-    else:
-        print("[*] No hay lotes pendientes por enviar.")
 
     save_seen(seen)
     print("=== FIN DEL SCRAPER ===")
