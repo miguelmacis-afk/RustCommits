@@ -7,8 +7,9 @@ from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 
 # --- CONFIGURACIÓN ---
-# Ahora obtiene el webhook de las variables de entorno de GitHub
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL") 
+# Obtiene el webhook de las variables de entorno de GitHub
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+# URL corregida (Facepunch usa el shortname directamente, sin /r/)
 FACEPUNCH_URL = "https://commits.facepunch.com/rust"
 SEEN_FILE = "seen_commits.json"
 BATCH_SIZE = 5
@@ -20,27 +21,43 @@ KEYWORDS = [
 ]
 
 def load_seen():
+    print(f"[*] Intentando cargar {SEEN_FILE}...")
     try:
         with open(SEEN_FILE, "r") as f:
-            return set(json.load(f))
-    except Exception:
+            seen = set(json.load(f))
+            print(f"[*] Éxito: {len(seen)} commits cacheados previamente.")
+            return seen
+    except FileNotFoundError:
+        print("[*] No se encontró cache previo. Se creará uno nuevo.")
+        return set()
+    except Exception as e:
+        print(f"[!] Error leyendo cache: {e}")
         return set()
 
 def save_seen(seen):
+    print(f"[*] Guardando {len(seen)} commits en {SEEN_FILE}...")
     with open(SEEN_FILE, "w") as f:
         json.dump(list(seen), f)
+    print("[*] Archivo guardado correctamente.")
 
 def is_significant(message):
     msg_lower = message.lower().strip()
-    if len(msg_lower) < 12 or msg_lower.startswith(("wip", "typo", "merge", "cleanup")):
-        return False
-    return any(kw in msg_lower for kw in KEYWORDS)
+    if len(msg_lower) < 12:
+        return False, "Demasiado corto"
+    if msg_lower.startswith(("wip", "typo", "merge", "cleanup")):
+        return False, "Palabra ignorada (wip/typo/merge/cleanup)"
+    
+    for kw in KEYWORDS:
+        if kw in msg_lower:
+            return True, f"Contiene palabra clave: '{kw}'"
+            
+    return False, "No contiene palabras clave significativas"
 
 def translate_text(text):
     try:
         return GoogleTranslator(source='auto', target='es').translate(text)
     except Exception as e:
-        print(f"Error en la traducción: {e}")
+        print(f"[!] Error en la traducción: {e}")
         return text
 
 def extract_media(element):
@@ -70,6 +87,7 @@ def extract_media(element):
     return images, videos
 
 def send_to_discord_batch(commits_batch):
+    print(f"[*] Preparando envío de lote con {len(commits_batch)} commits a Discord...")
     embeds = []
     extra_content = []
     
@@ -81,13 +99,11 @@ def send_to_discord_batch(commits_batch):
             "color": 15258703
         }
         
-        # Insertar la primera imagen en el embed
         if commit['images']:
             embed["image"] = {"url": commit['images'][0]}
             
         embeds.append(embed)
         
-        # Recopilar enlaces a videos o imágenes adicionales (ya que Discord no reproduce video dentro del embed directamente)
         media_links = []
         if commit['videos']:
             media_links.append("**Vídeos:** " + " | ".join(commit['videos']))
@@ -97,29 +113,45 @@ def send_to_discord_batch(commits_batch):
         if media_links:
             extra_content.append(f"🔗 **Extra de {commit['author']}**: " + " - ".join(media_links))
 
-    # Construir el payload con todos los embeds del lote
     payload = {"embeds": embeds}
     if extra_content:
         payload["content"] = "\n".join(extra_content)
         
     res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-    if res.status_code not in [200, 204]:
-        print(f"Error enviando a Discord ({res.status_code}): {res.text}")
-    else:
+    if res.status_code in [200, 204]:
         print(f"[+] Lote de {len(commits_batch)} commits enviado correctamente.")
+    else:
+        print(f"[!] Error enviando a Discord ({res.status_code}): {res.text}")
 
 def run_scraper():
-    seen = load_seen()
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    print("=== INICIANDO FACEPUNCH SCRAPER ===")
     
-    res = requests.get(FACEPUNCH_URL, headers=headers)
-    if res.status_code != 200:
-        print(f"Error al acceder a Facepunch: {res.status_code}")
+    if not DISCORD_WEBHOOK_URL:
+        print("[!] ERROR CRÍTICO: No se encontró la variable DISCORD_WEBHOOK_URL.")
+        print("[!] Verifica los Secrets en GitHub Actions.")
         return
 
-    soup = BeautifulSoup(res.text, 'html.parser')
-    cards = soup.select('.commit-card, .commit, div[data-commit-id]')
+    seen = load_seen()
     
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    print(f"[*] Conectando a {FACEPUNCH_URL}...")
+    res = requests.get(FACEPUNCH_URL, headers=headers)
+    
+    if res.status_code != 200:
+        print(f"[!] Error HTTP al acceder a Facepunch: Código {res.status_code}")
+        return
+    print("[*] Conexión HTTP exitosa.")
+
+    soup = BeautifulSoup(res.text, 'html.parser')
+    cards = soup.select('.commit-card, .commit, div[data-commit-id], a.commit')
+    print(f"[*] HTML parseado. Se encontraron {len(cards)} tarjetas de commits en la web.")
+    
+    if len(cards) == 0:
+        print("[!] ADVERTENCIA: Se encontraron 0 commits. Es posible que la web cargue los datos mediante JavaScript y BeautifulSoup no pueda verlos.")
+        print("[!] HTML de la web (primeros 500 caracteres):")
+        print(res.text[:500])
+        return
+
     batch = []
     
     for card in reversed(cards):
@@ -129,7 +161,12 @@ def run_scraper():
         if not commit_id and link_el:
             commit_id = link_el['href'].strip('/')
             
-        if not commit_id or commit_id in seen:
+        if not commit_id:
+            print("[-] Tarjeta ignorada: No se pudo encontrar un ID de commit.")
+            continue
+            
+        if commit_id in seen:
+            print(f"[-] Omitido (ya visto): {commit_id}")
             continue
 
         author_el = card.select_one('.author, .user-name')
@@ -141,7 +178,12 @@ def run_scraper():
         msg_el = card.select_one('.message, .description')
         message = msg_el.get_text(strip=True) if msg_el else ""
 
-        if is_significant(message):
+        print(f"[*] Analizando commit nuevo: {commit_id} de {author}...")
+        
+        is_sig, reason = is_significant(message)
+        
+        if is_sig:
+            print(f"  [+] APROBADO: {reason}")
             images, videos = extract_media(card)
             translated = translate_text(message)
 
@@ -156,19 +198,23 @@ def run_scraper():
                 'videos': videos
             })
             
-            # Si el lote alcanza el tamaño configurado, se envía y se vacía
             if len(batch) >= BATCH_SIZE:
                 send_to_discord_batch(batch)
                 batch = []
-                time.sleep(2) # Respetar rate limits de la API
+                time.sleep(2)
+        else:
+            print(f"  [-] DESCARTADO: {reason} | Mensaje original: '{message}'")
 
         seen.add(commit_id)
 
-    # Enviar cualquier commit restante que no haya llenado un bloque de 5
     if batch:
+        print(f"[*] Enviando los últimos {len(batch)} commits que no llenaron un lote entero.")
         send_to_discord_batch(batch)
+    else:
+        print("[*] No hay lotes pendientes por enviar.")
 
     save_seen(seen)
+    print("=== FIN DEL SCRAPER ===")
 
 if __name__ == "__main__":
     run_scraper()
