@@ -50,7 +50,7 @@ def is_significant(message):
     return False, "No contiene palabras clave significativas"
 
 def translate_text(text):
-    if not text or text.strip() in [".", "...", "codegen"]:
+    if not text or text.strip().lower() in [".", "...", "codegen"]:
         return text
 
     # 1. Intentar con GoogleTranslator
@@ -118,55 +118,32 @@ def extract_media(element):
     return images, videos
 
 def send_to_discord_batch(commits_batch):
-    print(f"[*] Preparando envío de lote profesional con {len(commits_batch)} commits a Discord...")
+    print(f"[*] Preparando envío de lote minimalista con {len(commits_batch)} commits a Discord...")
     embeds = []
     
     for commit in commits_batch:
-        extra_media = []
-        if commit['videos']:
-            video_links = [f"[🎬 Vídeo {i+1}]({url})" for i, url in enumerate(commit['videos'])]
-            extra_media.append(" • ".join(video_links))
-        if len(commit['images']) > 1:
-            img_links = [f"[🖼️ Imagen {i+2}]({url})" for i, url in enumerate(commit['images'][1:])]
-            extra_media.append(" • ".join(img_links))
+        # Limpiar prefijo molesto del repositorio
+        clean_repo = commit['repo'].replace("rust_reboot/main/", "")
+        
+        # Indicador visual si hay vídeo
+        video_icon = " 🎬" if commit['videos'] else ""
 
         embed = {
-            "title": f"🛠️ {commit['translated_msg']}",
-            "url": commit['url'],
             "color": 13517355,  # Color Rust (#CE422B)
             "author": {
-                "name": f"Desarrollador: {commit['author']}",
-                "icon_url": "https://commits.facepunch.com/favicon.ico"
+                "name": f"👤 {commit['author']}"
             },
-            "fields": [
-                {
-                    "name": "📂 Rama / Repositorio",
-                    "value": f"`{commit['repo']}`",
-                    "inline": True
-                },
-                {
-                    "name": "🆔 ID del Commit",
-                    "value": f"[`#{commit['id']}`]({commit['url']})",
-                    "inline": True
-                }
-            ],
+            # Todo el contenido en la descripción para un aspecto compacto y limpio
+            "description": f"**{commit['translated_msg']}**\n\n🔀 `{clean_repo}`\n📌 [#{commit['id']}]({commit['url']}){video_icon}",
             "footer": {
-                "text": "Facepunch Rust Commits",
-                "icon_url": "https://rust.facepunch.com/favicon.ico"
+                "text": "⚙️ Facepunch Rust Commits"
             },
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
-        # Miniatura pequeña en la esquina superior derecha
+        # Mostrar SOLAMENTE la primera imagen como miniatura pequeña (thumbnail)
         if commit['images']:
             embed["thumbnail"] = {"url": commit['images'][0]}
-
-        if extra_media:
-            embed["fields"].append({
-                "name": "📎 Multimedia Adicional",
-                "value": "\n".join(extra_media),
-                "inline": False
-            })
 
         embeds.append(embed)
 
@@ -219,7 +196,7 @@ def run_scraper():
         message = extract_commit_message(card)
         images, videos = extract_media(card)
 
-        # REGLA OBLIGATORIA: Si tiene multimedia (imagen o vídeo), pasa SÍ O SÍ.
+        # REGLA OBLIGATORIA: Si tiene multimedia (imagen o vídeo), se aprueba siempre.
         if images or videos:
             is_sig = True
             reason = f"Aprobado por multimedia ({len(images)} img, {len(videos)} vid)"
