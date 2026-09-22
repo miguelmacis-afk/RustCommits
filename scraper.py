@@ -1,3 +1,4 @@
+import os
 import json
 import re
 import time
@@ -6,10 +7,11 @@ from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 
 # --- CONFIGURACIÓN ---
-DISCORD_WEBHOOK_URL = "TU_WEBHOOK_DE_DISCORD_AQUI"
+# Ahora obtiene el webhook de las variables de entorno de GitHub
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL") 
 FACEPUNCH_URL = "https://commits.facepunch.com/r/rust"
 SEEN_FILE = "seen_commits.json"
-BATCH_SIZE = 5  # Cantidad de commits a agrupar por mensaje
+BATCH_SIZE = 5
 
 KEYWORDS = [
     "added", "new", "redesign", "system", "feature", "weapon",
