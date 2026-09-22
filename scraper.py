@@ -131,11 +131,10 @@ def send_to_discord_batch(commits_batch):
             img_links = [f"[🖼️ Imagen {i+2}]({url})" for i, url in enumerate(commit['images'][1:])]
             extra_media.append(" • ".join(img_links))
 
-        # Estructura del Embed Profesional
         embed = {
             "title": f"🛠️ {commit['translated_msg']}",
             "url": commit['url'],
-            "color": 13517355,  # Color oficial Naranja/Rojo Rust (#CE422B)
+            "color": 13517355,  # Color Naranja/Rojo Rust (#CE422B)
             "author": {
                 "name": f"Desarrollador: {commit['author']}",
                 "icon_url": "https://commits.facepunch.com/favicon.ico"
@@ -159,17 +158,17 @@ def send_to_discord_batch(commits_batch):
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
-        # Añadir multimedia adicional si existe
+        # MINIATURA PEQUEÑA: Usamos 'thumbnail' en lugar de 'image' para que se muestre en la esquina superior derecha
+        if commit['images']:
+            embed["thumbnail"] = {"url": commit['images'][0]}
+
+        # Añadir enlaces a multimedia adicional si existen
         if extra_media:
             embed["fields"].append({
                 "name": "📎 Multimedia Adicional",
                 "value": "\n".join(extra_media),
                 "inline": False
             })
-
-        # Añadir imagen principal al Embed si existe
-        if commit['images']:
-            embed["image"] = {"url": commit['images'][0]}
 
         embeds.append(embed)
 
