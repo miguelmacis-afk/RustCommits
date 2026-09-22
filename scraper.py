@@ -55,20 +55,25 @@ def translate_text(text):
         print(f"[!] Error en la traducción: {e}")
         return text
 
+def clean_message(raw_text):
+    """Limpia texto basura como contadores de reacciones o espacios extra."""
+    # Eliminar texto de reacciones tipo 'thumb_up 0 thumb_down 0'
+    cleaned = re.sub(r'thumb_up\s*\d+\s*thumb_down\s*\d+', '', raw_text, flags=re.IGNORECASE)
+    return cleaned.strip()
+
 def extract_commit_message(card):
     """Busca el mensaje del commit usando múltiples selectores o limpiando el nodo."""
-    # 1. Intentar selectores conocidos de Facepunch
     msg_el = card.select_one('.title, .commit-title, .message, .description, .text, p, blockquote, div.content')
     if msg_el and msg_el.get_text(strip=True):
-        return msg_el.get_text(strip=True)
+        return clean_message(msg_el.get_text(strip=True))
     
-    # 2. Respaldo: Clonar la tarjeta y eliminar elementos de autor, repo y tiempo para extraer el texto limpio
+    # Respaldo en caso de cambio de estructura HTML
     card_copy = BeautifulSoup(str(card), 'html.parser')
     for unneeded in card_copy.select('.author, .user-name, .repo, .repository, .date, .time, .avatar, img, video'):
         unneeded.decompose()
     
     clean_text = card_copy.get_text(separator=' ', strip=True)
-    return clean_text
+    return clean_message(clean_text)
 
 def extract_media(element):
     images, videos = [], []
@@ -105,7 +110,7 @@ def send_to_discord_batch(commits_batch):
         embed = {
             "title": f"Commit de {commit['author']} ({commit['repo']})",
             "url": commit['url'],
-            "description": f"**Traducción:**\n{commit['translated_msg']}\n\n**Original:**\n```{commit['original_msg']}```",
+            "description": commit['translated_msg'],  # Solo incluye la traducción
             "color": 15258703
         }
         
@@ -172,7 +177,6 @@ def run_scraper():
         repo_el = card.select_one('.repo, .repository')
         repo = repo_el.get_text(strip=True) if repo_el else "Rust"
         
-        # Extracción mejorada del mensaje
         message = extract_commit_message(card)
 
         print(f"[*] Analizando commit: {commit_id} de {author} | Msg: '{message[:50]}...'")
@@ -188,7 +192,6 @@ def run_scraper():
                 'id': commit_id,
                 'author': author,
                 'repo': repo,
-                'original_msg': message,
                 'translated_msg': translated,
                 'url': f"https://commits.facepunch.com/{commit_id}",
                 'images': images,
