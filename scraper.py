@@ -4,7 +4,7 @@ import re
 import time
 import requests
 from bs4 import BeautifulSoup
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 
 # --- CONFIGURACIÓN ---
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -51,17 +51,31 @@ def is_significant(message):
 def translate_text(text):
     if not text:
         return text
+
+    # 1. Intentar con GoogleTranslator añadiendo reintentos y pausas preventivas
+    for attempt in range(3):
+        try:
+            translated = GoogleTranslator(source='auto', target='es').translate(text)
+            if translated:
+                time.sleep(1)  # Pausa de 1s para no saturar los servidores de Google
+                return translated
+        except Exception as e:
+            print(f"[!] Google Translator límite/error (Intento {attempt + 1}/3): {e}")
+            time.sleep(2 * (attempt + 1))  # Espera progresiva: 2s, 4s, 6s
+
+    # 2. Proveedor de respaldo (MyMemory) si Google falla por completo
     try:
-        # Fijamos source='en' explícitamente para evitar fallos de autodetección
-        translated = GoogleTranslator(source='en', target='es').translate(text)
-        return translated if translated else text
+        print("[*] Probando proveedor de traducción de respaldo (MyMemory)...")
+        translated = MyMemoryTranslator(source='en-US', target='es-ES').translate(text)
+        if translated:
+            return translated
     except Exception as e:
-        print(f"[!] Error traduciendo '{text[:30]}...': {e}")
-        return text
+        print(f"[!] Error con proveedor de respaldo: {e}")
+
+    return text
 
 def clean_message(raw_text):
     """Limpia texto basura como contadores de reacciones o espacios extra."""
-    # Eliminar texto de reacciones tipo 'thumb_up 0 thumb_down 0'
     cleaned = re.sub(r'thumb_up\s*\d+\s*thumb_down\s*\d+', '', raw_text, flags=re.IGNORECASE)
     return cleaned.strip()
 
@@ -71,7 +85,6 @@ def extract_commit_message(card):
     if msg_el and msg_el.get_text(strip=True):
         return clean_message(msg_el.get_text(strip=True))
     
-    # Respaldo en caso de cambio de estructura HTML
     card_copy = BeautifulSoup(str(card), 'html.parser')
     for unneeded in card_copy.select('.author, .user-name, .repo, .repository, .date, .time, .avatar, img, video'):
         unneeded.decompose()
@@ -114,7 +127,7 @@ def send_to_discord_batch(commits_batch):
         embed = {
             "title": f"Commit de {commit['author']} ({commit['repo']})",
             "url": commit['url'],
-            "description": commit['translated_msg'],  # Solo incluye la traducción
+            "description": commit['translated_msg'],
             "color": 15258703
         }
         
