@@ -9,7 +9,7 @@ from deep_translator import GoogleTranslator, MyMemoryTranslator
 
 # --- CONFIGURACIÓN ---
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-FACEPUNCH_URL = "https://commits.facepunch.com/rust"
+FACEPUNCH_URL = "https://commits.facepunch.com/r/rust_reboot"
 SEEN_FILE = "seen_commits.json"
 BATCH_SIZE = 5
 
