@@ -1,0 +1,38 @@
+name: Facepunch Commits Scraper
+
+on:
+  schedule:
+    - cron: '*/10 * * * *' # Se ejecuta cada 10 minutos automáticamente
+  workflow_dispatch: # Te permite ejecutarlo manualmente desde la web con un botón
+
+jobs:
+  scrape-and-notify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Permiso obligatorio para que el bot pueda guardar el JSON
+
+    steps:
+      - name: Clonar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar librerías
+        run: pip install requests beautifulsoup4 deep-translator
+
+      - name: Ejecutar el Scraper
+        env:
+          # Carga el Webhook desde los secretos de GitHub para que no sea público
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python scraper.py
+
+      - name: Guardar el progreso (seen_commits.json)
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add seen_commits.json
+          # Comprueba si hay cambios en el JSON. Si los hay, hace un commit para guardarlos.
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto: Actualiza commits vistos" && git push)
