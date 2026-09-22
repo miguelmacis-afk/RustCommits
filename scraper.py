@@ -50,10 +50,10 @@ def is_significant(message):
     return False, "No contiene palabras clave significativas"
 
 def translate_text(text):
-    if not text:
+    if not text or text.strip() in [".", "...", "codegen"]:
         return text
 
-    # 1. Intentar con GoogleTranslator añadiendo reintentos y pausas
+    # 1. Intentar con GoogleTranslator
     for attempt in range(3):
         try:
             translated = GoogleTranslator(source='auto', target='es').translate(text)
@@ -61,7 +61,7 @@ def translate_text(text):
                 time.sleep(1)
                 return translated
         except Exception as e:
-            print(f"[!] Google Translator límite/error (Intento {attempt + 1}/3): {e}")
+            print(f"[!] Google Translator error (Intento {attempt + 1}/3): {e}")
             time.sleep(2 * (attempt + 1))
 
     # 2. Proveedor de respaldo (MyMemory)
@@ -122,7 +122,6 @@ def send_to_discord_batch(commits_batch):
     embeds = []
     
     for commit in commits_batch:
-        # Formatear archivos multimedia adicionales como hipervínculos Markdown
         extra_media = []
         if commit['videos']:
             video_links = [f"[🎬 Vídeo {i+1}]({url})" for i, url in enumerate(commit['videos'])]
@@ -134,7 +133,7 @@ def send_to_discord_batch(commits_batch):
         embed = {
             "title": f"🛠️ {commit['translated_msg']}",
             "url": commit['url'],
-            "color": 13517355,  # Color Naranja/Rojo Rust (#CE422B)
+            "color": 13517355,  # Color Rust (#CE422B)
             "author": {
                 "name": f"Desarrollador: {commit['author']}",
                 "icon_url": "https://commits.facepunch.com/favicon.ico"
@@ -158,11 +157,10 @@ def send_to_discord_batch(commits_batch):
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
-        # MINIATURA PEQUEÑA: Usamos 'thumbnail' en lugar de 'image' para que se muestre en la esquina superior derecha
+        # Miniatura pequeña en la esquina superior derecha
         if commit['images']:
             embed["thumbnail"] = {"url": commit['images'][0]}
 
-        # Añadir enlaces a multimedia adicional si existen
         if extra_media:
             embed["fields"].append({
                 "name": "📎 Multimedia Adicional",
@@ -219,14 +217,19 @@ def run_scraper():
         repo = repo_el.get_text(strip=True) if repo_el else "Rust"
         
         message = extract_commit_message(card)
+        images, videos = extract_media(card)
+
+        # REGLA OBLIGATORIA: Si tiene multimedia (imagen o vídeo), pasa SÍ O SÍ.
+        if images or videos:
+            is_sig = True
+            reason = f"Aprobado por multimedia ({len(images)} img, {len(videos)} vid)"
+        else:
+            is_sig, reason = is_significant(message)
 
         print(f"[*] Analizando commit: {commit_id} de {author} | Msg: '{message[:50]}...'")
         
-        is_sig, reason = is_significant(message)
-        
         if is_sig:
             print(f"  [+] APROBADO: {reason}")
-            images, videos = extract_media(card)
             translated = translate_text(message)
 
             batch.append({
