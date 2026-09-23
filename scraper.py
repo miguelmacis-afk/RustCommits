@@ -5,11 +5,9 @@ import time
 import requests
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
-from openai import OpenAI
 
 # --- CONFIGURACIÓN ---
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 FACEPUNCH_URL = "https://commits.facepunch.com/r/rust_reboot"
 SEEN_FILE = "seen_commits.json"
 BATCH_SIZE = 5
@@ -33,7 +31,6 @@ def load_seen():
 
 def save_seen(seen):
     print(f"[*] Guardando commits en {SEEN_FILE}...")
-    # Guardamos solo los últimos 2000 para evitar fugas de memoria
     seen_list = list(seen)[-2000:]
     with open(SEEN_FILE, "w") as f:
         json.dump(seen_list, f)
@@ -52,55 +49,84 @@ def is_significant(message):
             
     return False, "No contiene palabras clave significativas"
 
+def fix_gaming_context(text):
+    if not text:
+        return text
+    
+    fixes = {
+        r'\brolls\b': 'flips over',
+        r'\bspawn\b': 'appear',
+        r'\bspawns\b': 'appears',
+        r'\bdrop\b': 'leave item',
+        r'\bcrafting\b': 'making objects',
+        r'\bnurfs\b|\bnerfs\b': 'weakens',
+        r'\bbuffs\b': 'improves',
+        r'\bwipe\b': 'server reset',
+        r'\bmonument\b': 'structure',
+    }
+    
+    fixed_text = text.lower()
+    for pattern, replacement in fixes.items():
+        fixed_text = re.sub(pattern, replacement, fixed_text)
+        
+    return fixed_text
+
 def translate_text(text):
+    text_to_translate = fix_gaming_context(text)
     if not text or text.strip().lower() in [".", "...", "codegen"]:
         return text
 
-    if not GROQ_API_KEY:
-        print("[!] Advertencia: No se encontró GROQ_API_KEY. Devolviendo texto original.")
-        return text
+    # Usamos LibreTranslate (una API pública gratuita y open-source sin dependencias pesadas de librerías externas)
+    api_url = "https://libretranslate.de/translate"
+    payload = {
+        "q": text_to_translate,
+        "source": "en",
+        "target": "es",
+        "format": "text"
+    }
+    headers = {"Content-Type": "application/json"}
 
+    for attempt in range(3):
+        try:
+            response = requests.post(api_url, json=payload, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                translated = data.get("translatedText")
+                if translated:
+                    time.sleep(1)
+                    return translated
+            else:
+                print(f"[!] LibreTranslate error (Intento {attempt + 1}/3): Código {response.status_code}")
+        except Exception as e:
+            print(f"[!] Error de conexión con LibreTranslate (Intento {attempt + 1}/3): {e}")
+            
+        time.sleep(2 * (attempt + 1))
+
+    # Proveedor de respaldo secundario (MyMemory alternativo directo vía HTTP)
     try:
-        client = OpenAI(
-            base_url="https://api.groq.com/openai/v1",
-            api_key=GROQ_API_KEY
-        )
-
-        prompt = f"""Traduce el siguiente mensaje de commit de desarrollo de un videojuego (Rust) al español de manera natural y técnica. Mantén los nombres de funciones, archivos o términos en inglés si es apropiado para programadores/gamers, pero asegúrate de que se entienda bien. No añadas explicaciones ni introducciones, solo devuelve la traducción directa.
-
-Mensaje: {text}"""
-
-        response = client.chat.completions.create(
-            model="openai/gpt-oss-20b",  # Modelo activo y compatible con tu cuenta en Groq
-            messages=[
-                {"role": "system", "content": "Eres un traductor experto en desarrollo de videojuegos y programación."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=150
-        )
-
-        translated = response.choices[0].message.content.strip()
-        return translated if translated else text
-
+        print("[*] Probando proveedor de traducción de respaldo (MyMemory API)...")
+        fallback_url = f"https://api.mymemory.translated.net/get?q={requests.utils.quote(text_to_translate)}&langpair=en|es"
+        res = requests.get(fallback_url, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            translated = data.get("responseData", {}).get("translatedText")
+            if translated:
+                return translated
     except Exception as e:
-        print(f"[!] Error con la API de Groq: {e}")
-        return text
-        
+        print(f"[!] Error con proveedor de respaldo secundario: {e}")
+
+    return text
+
 def clean_and_translate_repo(repo_str):
     if not repo_str:
         return "Rust"
     
-    # 1. Eliminar prefijos comunes de ramas/repositorio
     cleaned = repo_str.replace("rust_reboot/main/", "").replace("main/", "")
-    
-    # 2. Eliminar el ID numérico final (ej: #16536)
     cleaned = re.sub(r'#\d+$', '', cleaned).strip()
+    cleaned_for_translation = cleaned.replace('_', ' ')
+    translated = translate_text(cleaned_for_translation)
     
-    # 3. Formatear limpio (reemplazar guiones bajos por espacios y aplicar formato título)
-    formatted = cleaned.replace('_', ' ').title()
-    
-    return formatted
+    return translated.title()
 
 def clean_message(raw_text):
     cleaned = re.sub(r'thumb_up\s*\d+\s*thumb_down\s*\d+', '', raw_text, flags=re.IGNORECASE)
