@@ -71,7 +71,7 @@ def translate_text(text):
 Mensaje: {text}"""
 
         response = client.chat.completions.create(
-            model="llama3-70b-8192",  # Modelo estable y compatible en Groq
+            model="llama-3.1-8b-instant",  # Modelo rápido y activo en Groq
             messages=[
                 {"role": "system", "content": "Eres un traductor experto en desarrollo de videojuegos y programación."},
                 {"role": "user", "content": prompt}
@@ -86,7 +86,7 @@ Mensaje: {text}"""
     except Exception as e:
         print(f"[!] Error con la API de Groq: {e}")
         return text
-
+        
 def clean_and_translate_repo(repo_str):
     if not repo_str:
         return "Rust"
