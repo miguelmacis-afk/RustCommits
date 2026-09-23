@@ -71,7 +71,7 @@ def translate_text(text):
 Mensaje: {text}"""
 
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",  # Modelo rápido y activo en Groq
+            model="openai/gpt-oss-20b",  # Modelo activo y compatible con tu cuenta en Groq
             messages=[
                 {"role": "system", "content": "Eres un traductor experto en desarrollo de videojuegos y programación."},
                 {"role": "user", "content": prompt}
