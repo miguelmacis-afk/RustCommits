@@ -2,7 +2,7 @@ name: Facepunch Commits Scraper
 
 on:
   schedule:
-    - cron: '*/10 * * * *' # Se ejecuta cada 10 minutos automáticamente
+    - cron: '*/5 * * * *' # Se ejecuta cada 10 minutos automáticamente
   workflow_dispatch: # Te permite ejecutarlo manualmente desde la web con un botón
 
 jobs:
