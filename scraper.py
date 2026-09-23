@@ -5,10 +5,11 @@ import time
 import requests
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
-from deep_translator import GoogleTranslator, MyMemoryTranslator
+from openai import OpenAI
 
 # --- CONFIGURACIÓN ---
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 FACEPUNCH_URL = "https://commits.facepunch.com/r/rust_reboot"
 SEEN_FILE = "seen_commits.json"
 BATCH_SIZE = 5
@@ -32,7 +33,7 @@ def load_seen():
 
 def save_seen(seen):
     print(f"[*] Guardando commits en {SEEN_FILE}...")
-    # Convertimos a lista y guardamos solo los últimos 2000 para evitar fugas de memoria
+    # Guardamos solo los últimos 2000 para evitar fugas de memoria
     seen_list = list(seen)[-2000:]
     with open(SEEN_FILE, "w") as f:
         json.dump(seen_list, f)
@@ -51,63 +52,55 @@ def is_significant(message):
             
     return False, "No contiene palabras clave significativas"
 
-def fix_gaming_context(text):
-    if not text:
-        return text
-    
-    fixes = {
-        r'\brolls\b': 'flips over',
-        r'\bspawn\b': 'appear',
-        r'\bspawns\b': 'appears',
-        r'\bdrop\b': 'leave item',
-        r'\bcrafting\b': 'making objects',
-        r'\bnurfs\b|\bnerfs\b': 'weakens',
-        r'\bbuffs\b': 'improves',
-        r'\bwipe\b': 'server reset',
-        r'\bmonument\b': 'structure',
-    }
-    
-    fixed_text = text.lower()
-    for pattern, replacement in fixes.items():
-        fixed_text = re.sub(pattern, replacement, fixed_text)
-        
-    return fixed_text
-
 def translate_text(text):
-    text_to_translate = fix_gaming_context(text)
     if not text or text.strip().lower() in [".", "...", "codegen"]:
         return text
 
-    for attempt in range(3):
-        try:
-            translated = GoogleTranslator(source='auto', target='es').translate(text_to_translate)
-            if translated:
-                time.sleep(1)
-                return translated
-        except Exception as e:
-            print(f"[!] Google Translator error (Intento {attempt + 1}/3): {e}")
-            time.sleep(2 * (attempt + 1))
+    if not GROQ_API_KEY:
+        print("[!] Advertencia: No se encontró GROQ_API_KEY. Devolviendo texto original.")
+        return text
 
     try:
-        print("[*] Probando proveedor de traducción de respaldo (MyMemory)...")
-        translated = MyMemoryTranslator(source='en-US', target='es-ES').translate(text_to_translate)
-        if translated:
-            return translated
-    except Exception as e:
-        print(f"[!] Error con proveedor de respaldo: {e}")
+        client = OpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=GROQ_API_KEY
+        )
 
-    return text
+        prompt = f"""Traduce el siguiente mensaje de commit de desarrollo de un videojuego (Rust) al español de manera natural y técnica. Mantén los nombres de funciones, archivos o términos en inglés si es apropiado para programadores/gamers, pero asegúrate de que se entienda bien. No añadas explicaciones ni introducciones, solo devuelve la traducción directa.
+
+Mensaje: {text}"""
+
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "Eres un traductor experto en desarrollo de videojuegos y programación."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=150
+        )
+
+        translated = response.choices[0].message.content.strip()
+        return translated if translated else text
+
+    except Exception as e:
+        print(f"[!] Error con la API de Groq: {e}")
+        return text
 
 def clean_and_translate_repo(repo_str):
     if not repo_str:
         return "Rust"
     
+    # 1. Eliminar prefijos comunes de ramas/repositorio
     cleaned = repo_str.replace("rust_reboot/main/", "").replace("main/", "")
-    cleaned = re.sub(r'#\d+$', '', cleaned).strip()
-    cleaned_for_translation = cleaned.replace('_', ' ')
-    translated = translate_text(cleaned_for_translation)
     
-    return translated.title()
+    # 2. Eliminar el ID numérico final (ej: #16536)
+    cleaned = re.sub(r'#\d+$', '', cleaned).strip()
+    
+    # 3. Formatear limpio (reemplazar guiones bajos por espacios y aplicar formato título)
+    formatted = cleaned.replace('_', ' ').title()
+    
+    return formatted
 
 def clean_message(raw_text):
     cleaned = re.sub(r'thumb_up\s*\d+\s*thumb_down\s*\d+', '', raw_text, flags=re.IGNORECASE)
@@ -201,7 +194,6 @@ def send_to_discord_batch(commits_batch):
     
     if video_urls:
         content_text = "\n".join(video_urls)
-        # Prevención de límite de 2000 caracteres en Discord
         if len(content_text) > 1900:
             content_text = content_text[:1900] + "\n... (demasiados videos para mostrar)"
         payload["content"] = content_text
@@ -211,7 +203,6 @@ def send_to_discord_batch(commits_batch):
     if res.status_code in [200, 204]:
         print(f"[+] Lote de {len(commits_batch)} commits enviado correctamente a Discord.")
     elif res.status_code == 429:
-        # Manejo seguro del rate limit
         try:
             retry_after = res.json().get('retry_after', 2)
         except Exception:
