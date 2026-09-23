@@ -21,12 +21,13 @@ jobs:
           python-version: '3.10'
 
       - name: Instalar librerías
-        run: pip install requests beautifulsoup4 deep-translator
+        run: pip install requests beautifulsoup4 deep-translator openai
 
       - name: Ejecutar el Scraper
         env:
-          # Carga el Webhook desde los secretos de GitHub para que no sea público
+          # Carga las variables desde los secretos de GitHub para que no sean públicos
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python scraper.py
 
       - name: Guardar el progreso (seen_commits.json)
