@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 
 # --- CONFIGURACIÓN ---
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY")
 FACEPUNCH_URL = "https://commits.facepunch.com/r/rust_reboot"
 SEEN_FILE = "seen_commits.json"
 BATCH_SIZE = 5
@@ -71,62 +72,47 @@ def fix_gaming_context(text):
         
     return fixed_text
 
-def translate_text(text):
-    text_to_translate = fix_gaming_context(text)
-    if not text or text.strip().lower() in [".", "...", "codegen"]:
-        return text
+def translate_batch_deepl(texts_list):
+    """Traduce una lista de textos utilizando la API Free de DeepL en una sola petición HTTP."""
+    if not texts_list:
+        return []
 
-    # Usamos LibreTranslate (una API pública gratuita y open-source sin dependencias pesadas de librerías externas)
-    api_url = "https://libretranslate.de/translate"
-    payload = {
-        "q": text_to_translate,
-        "source": "en",
-        "target": "es",
-        "format": "text"
+    if not DEEPL_API_KEY:
+        print("[!] Advertencia: DEEPL_API_KEY no encontrada. Se omitirá la traducción.")
+        return texts_list
+
+    # 1. Aplicamos el filtro de contexto de videojuegos
+    prepared_texts = [fix_gaming_context(t) for t in texts_list]
+
+    # 2. Configuración para DeepL API Free
+    api_url = "https://api-free.deepl.com/v2/translate"
+    headers = {
+        "Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}",
+        "Content-Type": "application/json"
     }
-    headers = {"Content-Type": "application/json"}
+    payload = {
+        "text": prepared_texts,
+        "target_lang": "ES"
+    }
 
-    for attempt in range(3):
-        try:
-            response = requests.post(api_url, json=payload, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                translated = data.get("translatedText")
-                if translated:
-                    time.sleep(1)
-                    return translated
-            else:
-                print(f"[!] LibreTranslate error (Intento {attempt + 1}/3): Código {response.status_code}")
-        except Exception as e:
-            print(f"[!] Error de conexión con LibreTranslate (Intento {attempt + 1}/3): {e}")
-            
-        time.sleep(2 * (attempt + 1))
-
-    # Proveedor de respaldo secundario (MyMemory alternativo directo vía HTTP)
     try:
-        print("[*] Probando proveedor de traducción de respaldo (MyMemory API)...")
-        fallback_url = f"https://api.mymemory.translated.net/get?q={requests.utils.quote(text_to_translate)}&langpair=en|es"
-        res = requests.get(fallback_url, timeout=10)
+        res = requests.post(api_url, json=payload, headers=headers, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            translated = data.get("responseData", {}).get("translatedText")
-            if translated:
-                return translated
+            return [item["text"] for item in data.get("translations", [])]
+        else:
+            print(f"[!] Error DeepL API ({res.status_code}): {res.text}")
     except Exception as e:
-        print(f"[!] Error con proveedor de respaldo secundario: {e}")
+        print(f"[!] Error de conexión con DeepL: {e}")
 
-    return text
+    return texts_list
 
-def clean_and_translate_repo(repo_str):
+def clean_repo_name(repo_str):
     if not repo_str:
         return "Rust"
-    
     cleaned = repo_str.replace("rust_reboot/main/", "").replace("main/", "")
     cleaned = re.sub(r'#\d+$', '', cleaned).strip()
-    cleaned_for_translation = cleaned.replace('_', ' ')
-    translated = translate_text(cleaned_for_translation)
-    
-    return translated.title()
+    return cleaned.replace('_', ' ')
 
 def clean_message(raw_text):
     cleaned = re.sub(r'thumb_up\s*\d+\s*thumb_down\s*\d+', '', raw_text, flags=re.IGNORECASE)
@@ -189,11 +175,22 @@ def extract_media(element):
 
 def send_to_discord_batch(commits_batch):
     print(f"[*] Preparando envío de lote minimalista con {len(commits_batch)} commits a Discord...")
+    
+    # 1. Traducir todos los mensajes del lote en una sola petición
+    raw_messages = [c['raw_msg'] for c in commits_batch]
+    translated_messages = translate_batch_deepl(raw_messages)
+    
+    # 2. Traducir los nombres de repositorio del lote
+    raw_repos = [clean_repo_name(c['repo']) for c in commits_batch]
+    translated_repos = translate_batch_deepl(raw_repos)
+
     embeds = []
     video_urls = []
     
-    for commit in commits_batch:
-        clean_repo = clean_and_translate_repo(commit['repo'])
+    for idx, commit in enumerate(commits_batch):
+        translated_msg = translated_messages[idx] if idx < len(translated_messages) else commit['raw_msg']
+        clean_repo = translated_repos[idx].title() if idx < len(translated_repos) else raw_repos[idx].title()
+        
         video_icon = " 🎬" if commit['videos'] else ""
 
         embed = {
@@ -201,7 +198,7 @@ def send_to_discord_batch(commits_batch):
             "author": {
                 "name": f"👤 {commit['author']}"
             },
-            "description": f"**{commit['translated_msg']}**\n\n🔀 `{clean_repo}`\n📌 [#{commit['id']}]({commit['url']}){video_icon}",
+            "description": f"**{translated_msg}**\n\n🔀 `{clean_repo}`\n📌 [#{commit['id']}]({commit['url']}){video_icon}",
             "footer": {
                 "text": "⚙️ Facepunch Rust Commits"
             },
@@ -245,6 +242,9 @@ def run_scraper():
     if not DISCORD_WEBHOOK_URL:
         print("[!] ERROR CRÍTICO: No se encontró la variable DISCORD_WEBHOOK_URL.")
         return
+
+    if not DEEPL_API_KEY:
+        print("[!] ADVERTENCIA: No se encontró DEEPL_API_KEY. Se enviarán las publicaciones en inglés.")
 
     seen = load_seen()
     
@@ -292,13 +292,12 @@ def run_scraper():
         
         if is_sig:
             print(f"  [+] APROBADO: {reason}")
-            translated = translate_text(message)
 
             batch.append({
                 'id': commit_id,
                 'author': author,
                 'repo': repo,
-                'translated_msg': translated,
+                'raw_msg': message,
                 'url': f"https://commits.facepunch.com/{commit_id}",
                 'images': images,
                 'videos': videos
