@@ -53,7 +53,7 @@ def translate_text(text):
     if not text or text.strip().lower() in [".", "...", "codegen"]:
         return text
 
-    # 1. Intentar con GoogleTranslator
+    # 1. Intentar con GoogleTranslator manteniendo saltos de línea
     for attempt in range(3):
         try:
             translated = GoogleTranslator(source='auto', target='es').translate(text)
@@ -76,33 +76,35 @@ def translate_text(text):
     return text
 
 def clean_message(raw_text):
+    # Eliminar contadores de reacciones
     cleaned = re.sub(r'thumb_up\s*\d+\s*thumb_down\s*\d+', '', raw_text, flags=re.IGNORECASE)
-    return cleaned.strip()
+    # Limpiar espacios extra por línea manteniendo los saltos de línea estructurales (\n)
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    return '\n'.join(lines)
 
 def extract_commit_message(card):
-    msg_el = card.select_one('.title, .commit-title, .message, .description, .text, p, blockquote, div.content')
+    # Intentar buscar el nodo específico del contenido del commit
+    msg_el = card.select_one('.title, .commit-title, .message, .description, .text, blockquote')
     if msg_el and msg_el.get_text(strip=True):
-        return clean_message(msg_el.get_text(strip=True))
+        return clean_message(msg_el.get_text(separator='\n', strip=True))
     
     card_copy = BeautifulSoup(str(card), 'html.parser')
     for unneeded in card_copy.select('.author, .user-name, .repo, .repository, .date, .time, .avatar, img, video'):
         unneeded.decompose()
     
-    clean_text = card_copy.get_text(separator=' ', strip=True)
+    # Usar '\n' como separador para conservar la estructura del mensaje
+    clean_text = card_copy.get_text(separator='\n', strip=True)
     return clean_message(clean_text)
 
 def extract_media(element):
     images, videos = [], []
     
-    # Trabajar sobre una copia limpia sin elementos de usuario/avatar
     card_copy = BeautifulSoup(str(element), 'html.parser')
     for avatar_node in card_copy.select('.avatar, .user-avatar, .author, .user-name, .user, [class*="avatar"]'):
         avatar_node.decompose()
         
-    # Palabras prohibidas en URLs para ignorar avatares
     AVATAR_TERMS = ['avatar', 'avatars', 'profile', 'gravatar', 'steamcommunity', '.svg']
 
-    # 1. Extraer imágenes de etiquetas <img> que hayan quedado
     for img in card_copy.find_all('img'):
         src = img.get('src')
         if not src:
@@ -115,7 +117,6 @@ def extract_media(element):
         if full_url not in images:
             images.append(full_url)
             
-    # 2. Extraer vídeos de etiquetas <video> o <source>
     for video in card_copy.find_all(['video', 'source']):
         src = video.get('src')
         if src:
@@ -123,7 +124,6 @@ def extract_media(element):
             if full_url not in videos:
                 videos.append(full_url)
             
-    # 3. Extraer URLs multimedia del texto restante
     text = card_copy.get_text()
     urls = re.findall(r'https?://[^\s]+\.(?:png|jpg|jpeg|gif|mp4|webm)', text)
     for url in urls:
@@ -159,7 +159,6 @@ def send_to_discord_batch(commits_batch):
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
-        # Imagen grande en el embed
         if commit['images']:
             embed["image"] = {"url": commit['images'][0]}
 
@@ -221,14 +220,13 @@ def run_scraper():
         message = extract_commit_message(card)
         images, videos = extract_media(card)
 
-        # REGLA OBLIGATORIA: Si tiene multimedia real de commit (imagen o vídeo), pasa siempre
         if images or videos:
             is_sig = True
             reason = f"Aprobado por multimedia ({len(images)} img, {len(videos)} vid)"
         else:
             is_sig, reason = is_significant(message)
 
-        print(f"[*] Analizando commit: {commit_id} de {author} | Msg: '{message[:50]}...'")
+        print(f"[*] Analizando commit: {commit_id} de {author} | Msg: '{message[:50].replace('\n', ' ')}...'")
         
         if is_sig:
             print(f"  [+] APROBADO: {reason}")
