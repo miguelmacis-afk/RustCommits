@@ -5,14 +5,10 @@ import time
 import requests
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
-from deep_translator import GoogleTranslator
-from openai import OpenAI
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 
 # --- CONFIGURACIÓN ---
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-# Usaremos GROQ por ser gratis y rapidísimo, pero puedes cambiarlo por OPENAI_API_KEY si prefieres ChatGPT
-AI_API_KEY = os.environ.get("GROQ_API_KEY") 
-
 FACEPUNCH_URL = "https://commits.facepunch.com/r/rust_reboot"
 SEEN_FILE = "seen_commits.json"
 BATCH_SIZE = 5
@@ -35,10 +31,12 @@ def load_seen():
         return set()
 
 def save_seen(seen):
-    print(f"[*] Guardando {len(seen)} commits en {SEEN_FILE}...")
+    print(f"[*] Guardando commits en {SEEN_FILE}...")
+    # Convertimos a lista y guardamos solo los últimos 2000 para evitar fugas de memoria
+    seen_list = list(seen)[-2000:]
     with open(SEEN_FILE, "w") as f:
-        json.dump(list(seen), f)
-    print("[*] Archivo guardado correctamente.")
+        json.dump(seen_list, f)
+    print(f"[*] Archivo guardado correctamente ({len(seen_list)} commits).")
 
 def is_significant(message):
     msg_lower = message.lower().strip()
@@ -53,50 +51,50 @@ def is_significant(message):
             
     return False, "No contiene palabras clave significativas"
 
+def fix_gaming_context(text):
+    if not text:
+        return text
+    
+    fixes = {
+        r'\brolls\b': 'flips over',
+        r'\bspawn\b': 'appear',
+        r'\bspawns\b': 'appears',
+        r'\bdrop\b': 'leave item',
+        r'\bcrafting\b': 'making objects',
+        r'\bnurfs\b|\bnerfs\b': 'weakens',
+        r'\bbuffs\b': 'improves',
+        r'\bwipe\b': 'server reset',
+        r'\bmonument\b': 'structure',
+    }
+    
+    fixed_text = text.lower()
+    for pattern, replacement in fixes.items():
+        fixed_text = re.sub(pattern, replacement, fixed_text)
+        
+    return fixed_text
+
 def translate_text(text):
+    text_to_translate = fix_gaming_context(text)
     if not text or text.strip().lower() in [".", "...", "codegen"]:
         return text
 
-    # 1. INTENTO DE TRADUCCIÓN CON INTELIGENCIA ARTIFICIAL
-    if AI_API_KEY:
-        try:
-            # Configurado para usar la API de Groq (gratis). Si usas OpenAI, quita el base_url.
-            client = OpenAI(api_key=AI_API_KEY, base_url="https://api.groq.com/openai/v1")
-            
-            # Aquí está la magia: le damos el contexto del videojuego a la IA
-            prompt_sistema = (
-                "Eres un traductor experto en el videojuego 'Rust'. "
-                "Traduce los mensajes de los desarrolladores al español de forma natural. "
-                "Reglas:\n"
-                "1. Traduce usando jerga de videojuegos (ej. 'rolls' referido a vehículos es 'vuelca', 'crafting' es 'fabricación').\n"
-                "2. Conserva palabras clave si es lo normal (wipe, spawn, loot).\n"
-                "3. Responde ÚNICAMENTE con la traducción, sin comillas, ni explicaciones adicionales."
-            )
-            
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile", # Modelo ultrarrápido y potente de Groq
-                messages=[
-                    {"role": "system", "content": prompt_sistema},
-                    {"role": "user", "content": f"Traduce esto:\n{text}"}
-                ],
-                temperature=0.3, # Baja creatividad, alta precisión
-                max_tokens=200
-            )
-            translated = response.choices[0].message.content.strip()
-            if translated:
-                return translated
-        except Exception as e:
-            print(f"[!] Error con la IA (Groq/OpenAI), usando respaldo de Google: {e}")
-
-    # 2. RESPALDO (Google Translator) por si la IA falla
     for attempt in range(3):
         try:
-            translated = GoogleTranslator(source='auto', target='es').translate(text)
+            translated = GoogleTranslator(source='auto', target='es').translate(text_to_translate)
             if translated:
                 time.sleep(1)
                 return translated
         except Exception as e:
+            print(f"[!] Google Translator error (Intento {attempt + 1}/3): {e}")
             time.sleep(2 * (attempt + 1))
+
+    try:
+        print("[*] Probando proveedor de traducción de respaldo (MyMemory)...")
+        translated = MyMemoryTranslator(source='en-US', target='es-ES').translate(text_to_translate)
+        if translated:
+            return translated
+    except Exception as e:
+        print(f"[!] Error con proveedor de respaldo: {e}")
 
     return text
 
@@ -107,8 +105,8 @@ def clean_and_translate_repo(repo_str):
     cleaned = repo_str.replace("rust_reboot/main/", "").replace("main/", "")
     cleaned = re.sub(r'#\d+$', '', cleaned).strip()
     cleaned_for_translation = cleaned.replace('_', ' ')
-    
     translated = translate_text(cleaned_for_translation)
+    
     return translated.title()
 
 def clean_message(raw_text):
@@ -130,6 +128,7 @@ def extract_commit_message(card):
 
 def extract_media(element):
     images, videos = [], []
+    
     card_copy = BeautifulSoup(str(element), 'html.parser')
     for avatar_node in card_copy.select('.avatar, .user-avatar, .author, .user-name, .user, [class*="avatar"]'):
         avatar_node.decompose()
@@ -143,6 +142,7 @@ def extract_media(element):
         src_lower = src.lower()
         if any(term in src_lower for term in AVATAR_TERMS):
             continue
+            
         full_url = 'https:' + src if src.startswith('//') else ('https://commits.facepunch.com' + src if not src.startswith('http') else src)
         if full_url not in images:
             images.append(full_url)
@@ -160,6 +160,7 @@ def extract_media(element):
         url_lower = url.lower()
         if any(term in url_lower for term in AVATAR_TERMS):
             continue
+            
         if url.endswith(('.mp4', '.webm')) and url not in videos:
             videos.append(url)
         elif not url.endswith(('.mp4', '.webm')) and url not in images:
@@ -199,11 +200,25 @@ def send_to_discord_batch(commits_batch):
     payload = {"embeds": embeds}
     
     if video_urls:
-        payload["content"] = "\n".join(video_urls)
+        content_text = "\n".join(video_urls)
+        # Prevención de límite de 2000 caracteres en Discord
+        if len(content_text) > 1900:
+            content_text = content_text[:1900] + "\n... (demasiados videos para mostrar)"
+        payload["content"] = content_text
 
     res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    
     if res.status_code in [200, 204]:
         print(f"[+] Lote de {len(commits_batch)} commits enviado correctamente a Discord.")
+    elif res.status_code == 429:
+        # Manejo seguro del rate limit
+        try:
+            retry_after = res.json().get('retry_after', 2)
+        except Exception:
+            retry_after = 2
+        print(f"[!] Rate limit de Discord alcanzado. Esperando {retry_after} segundos...")
+        time.sleep(retry_after)
+        requests.post(DISCORD_WEBHOOK_URL, json=payload)
     else:
         print(f"[!] Error enviando a Discord ({res.status_code}): {res.text}")
 
