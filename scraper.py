@@ -226,7 +226,8 @@ def run_scraper():
         else:
             is_sig, reason = is_significant(message)
 
-        print(f"[*] Analizando commit: {commit_id} de {author} | Msg: '{message[:50].replace('\n', ' ')}...'")
+        msg_preview = message[:50].replace('\n', ' ')
+        print(f"[*] Analizando commit: {commit_id} de {author} | Msg: '{msg_preview}...'")
         
         if is_sig:
             print(f"  [+] APROBADO: {reason}")
