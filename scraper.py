@@ -29,24 +29,7 @@ def load_seen():
     except Exception:
         print("[*] No se encontró cache previo. Se iniciará desde cero.")
         return set()
-def clean_and_translate_repo(repo_str):
-    if not repo_str:
-        return "Rust"
-    
-    # 1. Eliminar prefijos comunes de ramas/repositorio
-    cleaned = repo_str.replace("rust_reboot/main/", "").replace("main/", "")
-    
-    # 2. Eliminar el ID numérico final (ej: #16536, #165360)
-    cleaned = re.sub(r'#\d+$', '', cleaned).strip()
-    
-    # 3. Reemplazar guiones bajos por espacios para mejorar la traducción
-    cleaned_for_translation = cleaned.replace('_', ' ')
-    
-    # 4. Traducir el texto
-    translated = translate_text(cleaned_for_translation)
-    
-    # 5. Aplicar formato de título (Mayúscula en cada palabra)
-    return translated.title()
+
 def save_seen(seen):
     print(f"[*] Guardando {len(seen)} commits en {SEEN_FILE}...")
     with open(SEEN_FILE, "w") as f:
@@ -91,6 +74,25 @@ def translate_text(text):
         print(f"[!] Error con proveedor de respaldo: {e}")
 
     return text
+
+def clean_and_translate_repo(repo_str):
+    if not repo_str:
+        return "Rust"
+    
+    # 1. Eliminar prefijos comunes de ramas/repositorio
+    cleaned = repo_str.replace("rust_reboot/main/", "").replace("main/", "")
+    
+    # 2. Eliminar el ID numérico final (ej: #16536, #165360)
+    cleaned = re.sub(r'#\d+$', '', cleaned).strip()
+    
+    # 3. Reemplazar guiones bajos por espacios para mejorar la traducción
+    cleaned_for_translation = cleaned.replace('_', ' ')
+    
+    # 4. Traducir el texto
+    translated = translate_text(cleaned_for_translation)
+    
+    # 5. Aplicar formato de título (Mayúscula en cada palabra)
+    return translated.title()
 
 def clean_message(raw_text):
     # Eliminar contadores de reacciones
@@ -161,7 +163,6 @@ def send_to_discord_batch(commits_batch):
     video_urls = []
     
     for commit in commits_batch:
-        # AQUÍ SE APLICA LA LIMPIEZA Y TRADUCCIÓN:
         clean_repo = clean_and_translate_repo(commit['repo'])
         video_icon = " 🎬" if commit['videos'] else ""
 
@@ -195,7 +196,7 @@ def send_to_discord_batch(commits_batch):
         print(f"[+] Lote de {len(commits_batch)} commits enviado correctamente a Discord.")
     else:
         print(f"[!] Error enviando a Discord ({res.status_code}): {res.text}")
-        
+
 def run_scraper():
     print("=== INICIANDO FACEPUNCH SCRAPER ===")
     
